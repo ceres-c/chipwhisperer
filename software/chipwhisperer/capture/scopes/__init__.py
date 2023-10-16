@@ -14,10 +14,11 @@ Scopes:
 """
 from .OpenADC import OpenADC
 from .cwnano import CWNano
+from .MSO4 import MSO4
 from typing import Union
 # try:
 #     from .sakura_g import SakuraG
 # except:
 #     pass
 
-ScopeTypes = Union[OpenADC, CWNano]
+ScopeTypes = Union[OpenADC, CWNano, MSO4]
