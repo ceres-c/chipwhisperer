@@ -1,3 +1,5 @@
+from typing import Type, Union
+
 import pyvisa
 
 from chipwhisperer.common.utils import util
@@ -83,7 +85,6 @@ class MSO4TriggerBase(util.DisableNewAttr):
         if not self._cached_coupling:
             self._cached_coupling = self.sc.query(f'TRIGGER:{self.event}:{self._type}:COUPLING?').strip()
         return self._cached_coupling
-
     def _set_coupling(self, coupling: str) -> None:
         if self._cached_coupling == coupling:
             return
@@ -111,7 +112,6 @@ class MSO4TriggerBase(util.DisableNewAttr):
             except ValueError as exc:
                 raise ValueError(f'Got invalid trigger level from oscilloscope `{resp}`. Must be a float.') from exc
         return self._cached_level
-
     def _set_level(self, level: float) -> None:
         if self._cached_level == level:
             return
@@ -142,7 +142,33 @@ class MSO4TriggerBase(util.DisableNewAttr):
             raise ValueError(f'Invalid trigger level {level}. Must be a float or an int.')
         self._set_level(level)
 
-    # TODO mode property
+    def _get_mode(self) -> str:
+        if not self._cached_mode:
+            self._cached_mode = self.sc.query('TRIGGER:A:MODe?').strip()
+        return self._cached_mode
+    def _set_mode(self, mode: str) -> None:
+        if self._cached_mode == mode:
+            return
+        self._cached_mode = mode
+        self.sc.write(f'TRIGGER:A:MODe {mode}')
+
+    @property
+    def mode(self):
+        """The trigger mode (auto/normal).
+        Raises:
+            NotImplementedError: if trigger event is not A
+            ValueError: if value is not one of the allowed strings
+        """
+        if self.event != 'A':
+            raise NotImplementedError('Trigger mode is only supported for event A.')
+        return self._get_mode()
+    @mode.setter
+    def mode(self, mode: str):
+        if self.event != 'A':
+            raise NotImplementedError('Trigger mode is only supported for event A.')
+        if mode.lower() not in MSO4TriggerBase.modes:
+            raise ValueError(f'Invalid trigger mode {mode}. Valid modes: {MSO4TriggerBase.modes}')
+        self._set_mode(mode)
 
 class MSO4EdgeTrigger(MSO4TriggerBase):
     """Edge trigger
@@ -156,13 +182,13 @@ class MSO4EdgeTrigger(MSO4TriggerBase):
             § Trigger on sequential events (A and B triggers)
             NOTE: Most likely, you just want to use MSO4SequenceTrigger instead of this.
         mode: The trigger mode (auto/normal)
-        edge_slope: The edge slope (rising/falling/any)
+        edge_slope: The edge slope (rise/fall/either)
     """
 
     _name = "ChipWhisperer/MSO4EdgeTrigger"
     _type = 'EDGE'
 
-    slopes = ['rising', 'falling', 'any']
+    slopes = ['rise', 'fall', 'either']
 
     def __init__(self, res: pyvisa.resources.MessageBasedResource, event: str = 'A'):
         super().__init__(res, event)
@@ -178,14 +204,24 @@ class MSO4EdgeTrigger(MSO4TriggerBase):
         if not self._cached_edge_slope:
             self._cached_edge_slope = self.sc.query(f'TRIGGER:{self.event}:EDGE:SLOpe?').strip()
         return self._cached_edge_slope
-
     def _set_edge_slope(self, slope: str) -> None:
         if self._cached_edge_slope == slope:
             return
         self._cached_edge_slope = slope
         self.sc.write(f'TRIGGER:{self.event}:EDGE:SLOpe {slope}')
 
-    # TODO edge_slope property
+    @property
+    def edge_slope(self):
+        """The edge slope (rise/fall/either).
+        Raises:
+            ValueError: if value is not one of the allowed strings
+        """
+        return self._get_edge_slope()
+    @edge_slope.setter
+    def edge_slope(self, slope: str):
+        if slope.lower() not in MSO4EdgeTrigger.slopes:
+            raise ValueError(f'Invalid edge slope {slope}. Valid slopes: {MSO4EdgeTrigger.slopes}')
+        self._set_edge_slope(slope)
 
 class MSO4WidthTrigger(MSO4TriggerBase):
     """Pulse Width trigger
@@ -224,4 +260,4 @@ class MSO4WidthTrigger(MSO4TriggerBase):
 
     # TODO lowlimit, highlimit, when & polarity properties
 
-MSO4Triggers = MSO4EdgeTrigger | MSO4WidthTrigger
+MSO4Triggers = Union[Type[MSO4EdgeTrigger], Type[MSO4WidthTrigger]]
