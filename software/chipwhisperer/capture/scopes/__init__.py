@@ -15,6 +15,7 @@ Scopes:
 from .OpenADC import OpenADC
 from .cwnano import CWNano
 from .MSO4 import MSO4
+from .mso4hardware.triggers import MSO4Triggers, MSO4EdgeTrigger, MSO4WidthTrigger
 from typing import Union
 # try:
 #     from .sakura_g import SakuraG

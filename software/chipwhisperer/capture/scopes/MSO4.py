@@ -1,162 +1,14 @@
 import pyvisa
 
-from chipwhisperer.logging import *
-from ...common.utils import util
-
-class MSO4TriggerSettings(util.DisableNewAttr):
-    """Trigger config for the MSO 4-Series
-
-    Attributes:
-        typ: The type of event to use as a trigger.
-        source: The source of the event currently configured as a trigger.
-        coupling: The coupling of the trigger source.
-        level: The trigger level.
-        event: The event channel (A or B) to use as a trigger.
-            See: 4/5/6 Series MSO Help (https://www.tek.com/en/sitewide-content/manuals/4/5/6/4-5-6-series-mso-help)
-            § Trigger on sequential events (A and B triggers)
-    """
-
-    modes = ['edge', 'width', 'timeout', 'runt', 'window', 'logic', 'sethold', 'transition', 'bus']
-    implemented_modes = ['edge'] # I know, sorry...
-    sources = ['ch1', 'ch2', 'ch3', 'ch4', 'auxiliary', 'aux', 'line'] # NOTE: Digital channels are not supported
-    couplings = ['dc', 'hfrej', 'lfrej', 'noiserej']
-    events = ['A', 'B']
-
-    def __init__(self, res: pyvisa.resources.MessageBasedResource, event: str = 'A'):
-        super().__init__()
-
-        self.sc: pyvisa.resources.MessageBasedResource = res
-        if event not in MSO4TriggerSettings.events:
-            raise ValueError(f'Invalid event {event}. Valid events: {MSO4TriggerSettings.events}')
-        self.event = event
-        self._clear_caches()
-        self.disable_newattr()
-
-    def _clear_caches(self):
-        self._cached_typ = None
-        self._cached_source = None
-        self._cached_coupling = None
-        self._cached_level = None
-        self._cached_edge_slope = None
-
-    def _get_type(self) -> str:
-        if not self._cached_typ:
-            self._cached_typ = self.sc.query(f'TRIGGER:{self.event}:TYPE?').strip()
-        return self._cached_typ
-
-    def _set_typ(self, typ: str) -> None:
-        if self._cached_typ == typ:
-            return
-        self._cached_typ = typ
-        self.sc.write(f'TRIGGER:{self.event}:TYPE {typ}')
-
-    @property
-    def typ(self):
-        """The type of event to use as a trigger.
-        Raises:
-           ValueError: if value is not one of the allowed strings
-           NotImplementedError: if value is not implemented (e.g. Bus values,
-        """
-        return self._get_type()
-    @typ.setter
-    def typ(self, mode: str):
-        if mode.lower() not in MSO4TriggerSettings.modes:
-            raise ValueError(f'Invalid trigger mode {mode}. Valid modes: {MSO4TriggerSettings.modes}')
-        if mode.lower() not in MSO4TriggerSettings.implemented_modes:
-            raise NotImplementedError(f'Trigger mode {mode} is not implemented. Supported modes: {MSO4TriggerSettings.implemented_modes}')
-        self._set_typ(mode)
-
-    def _get_source(self, trig_typ: str = "") -> str:
-        if not trig_typ:
-            trig_typ = self._get_type()
-        if not self._cached_source:
-            self._cached_source = self.sc.query(f'TRIGGER:{self.event}:{trig_typ}:SOURCE?').strip()
-        return self._cached_source
-
-    def _set_source(self, trig_typ: str, src: str) -> None:
-        if self._cached_source == src:
-            return
-        self._cached_source = src
-        self.sc.write(f'TRIGGER:{self.event}:{trig_typ}:SOURCE {src}')
-
-    @property
-    def source(self):
-        """The source of the event currently configured as a trigger.
-        Raises:
-            ValueError: if value is not one of the allowed strings
-        """
-        return self._get_source(self.typ)
-    @source.setter
-    def source(self, src: str):
-        if src.lower() not in MSO4TriggerSettings.sources:
-            raise ValueError(f'Invalid trigger source {src}. Valid sources: {MSO4TriggerSettings.sources}')
-        self._set_source(self.typ, src)
-
-    def _get_coupling(self, trig_typ: str) -> str:
-        if not self._cached_coupling:
-            self._cached_coupling = self.sc.query(f'TRIGGER:{self.event}:{trig_typ}:COUPLING?').strip()
-        return self._cached_coupling
-
-    def _set_coupling(self, trig_typ: str, coupling: str) -> None:
-        if self._cached_coupling == coupling:
-            return
-        self._cached_coupling = coupling
-        self.sc.write(f'TRIGGER:{self.event}:{trig_typ}:COUPLING {coupling}')
-
-    @property
-    def coupling(self):
-        """The coupling of the trigger source.
-        Raises:
-            ValueError: if value is not one of the allowed strings
-        """
-        return self._get_coupling(self.typ)
-    @coupling.setter
-    def coupling(self, coupling: str):
-        if coupling.lower() not in MSO4TriggerSettings.couplings:
-            raise ValueError(f'Invalid trigger coupling {coupling}. Valid coupling: {MSO4TriggerSettings.couplings}')
-        self._set_coupling(self.typ, coupling)
-
-    def _get_level(self) -> float:
-        if not self._cached_level:
-            resp = self.sc.query(f'TRIGGER:{self.event}:LEVEL:{self._get_source()}?').strip()
-            try:
-                self._cached_level = float(resp)
-            except ValueError as exc:
-                raise ValueError(f'Got invalid trigger level from oscilloscope `{resp}`. Must be a float.') from exc
-        return self._cached_level
-
-    def _set_level(self, level: float) -> None:
-        if self._cached_level == level:
-            return
-        self.sc.write(f'TRIGGER:{self.event}:LEVEL:{self._get_source()} {level:.4e}')
-
-        # Check actual level
-        # TODO check EXE bit in Standard Event Status Register (SESR) ('*ESR?')
-        # to verify the level was set correctly.
-        # This is currently not possible as the SESR is not updated in this scenario
-        # on firmware 2.0.3.950
-
-        # Workaround
-        self._cached_level = None
-        self._cached_level = self._get_level()
-        if self._cached_level != level:
-            scope_logger.warning('Failed to set trigger level to %f. Got %f instead.', level, self._cached_level)
-
-    @property
-    def level(self):
-        """The trigger level.
-        Raises:
-            ValueError: if value is not a float
-        """
-        return self._get_level()
-    @level.setter
-    def level(self, level: float):
-        if not isinstance(level, float) and not isinstance(level, int):
-            raise ValueError(f'Invalid trigger level {level}. Must be a float or an int.')
-        self._set_level(level)
+from .mso4hardware.triggers import MSO4Triggers, MSO4EdgeTrigger
 
 class MSO4:
     """Tektronix MSO 4-Series scope object.
+
+    Attributes:
+        rm: pyvisa.ResourceManager instance
+        sc: pyvisa.resources.MessageBasedResource instance
+        trig: MSO4Triggers type (not an instance)
     """
 
     _name = "ChipWhisperer/MSO4"
@@ -164,7 +16,7 @@ class MSO4:
     def __init__(self):
         self.rm: pyvisa.ResourceManager = None # type: ignore
         self.sc: pyvisa.resources.MessageBasedResource = None # type: ignore
-        self.trig: MSO4TriggerSettings = None # type: ignore
+        self._trig: MSO4Triggers = None # type: ignore # Local storage for the internal trigger instance
 
         self.connectStatus = False
 
@@ -192,7 +44,7 @@ class MSO4:
             'firmware': s[3]
         }
 
-    def con(self, ip: str = "", **kwargs) -> bool:
+    def con(self, ip: str = "", trig_type: MSO4Triggers = MSO4EdgeTrigger, **kwargs) -> bool:
         """Connect to scope.
 
         Args:
@@ -211,7 +63,7 @@ class MSO4:
 
         self.rm = pyvisa.ResourceManager()
         self.sc = self.rm.open_resource(f'TCPIP::{ip}::INSTR') # type: ignore
-        self.trig = MSO4TriggerSettings(self.sc)
+        self.trig = trig_type
 
         sc_id = self._id_scope()
         if sc_id['vendor'] != 'TEKTRONIX':
@@ -276,3 +128,10 @@ class MSO4:
             A numpy array containing the scope data.
         """
         pass
+
+    @property
+    def trig(self) -> MSO4Triggers:
+        return self._trig
+    @trig.setter
+    def trig(self, trig_type: MSO4Triggers):
+        self._trig = trig_type(self.sc)
