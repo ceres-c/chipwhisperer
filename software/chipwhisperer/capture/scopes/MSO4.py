@@ -128,9 +128,19 @@ class MSO4TriggerSettings(util.DisableNewAttr):
     def _set_level(self, level: float) -> None:
         if self._cached_level == level:
             return
-        # self._cached_level = level
         self.sc.write(f'TRIGGER:{self.event}:LEVEL:{self._get_source()} {level:.4e}')
-        # TODO check EXE register to verify the level was set correctly
+
+        # Check actual level
+        # TODO check EXE bit in Standard Event Status Register (SESR) ('*ESR?')
+        # to verify the level was set correctly.
+        # This is currently not possible as the SESR is not updated in this scenario
+        # on firmware 2.0.3.950
+
+        # Workaround
+        self._cached_level = None
+        self._cached_level = self._get_level()
+        if self._cached_level != level:
+            scope_logger.warning('Failed to set trigger level to %f. Got %f instead.', level, self._cached_level)
 
     @property
     def level(self):
@@ -208,6 +218,11 @@ class MSO4:
             raise OSError(f'Invalid vendor returned from scope {sc_id["vendor"]}')
         if sc_id['model'] not in ['MSO44', 'MSO46']:
             raise OSError(f'Invalid model returned from scope {sc_id["model"]}')
+
+        # Enable all events reporting in the status register
+        self.sc.write('DESE 255')
+        # Clear: Event Queue, Standard Event Status Register, Status Byte Register
+        self.sc.write('*CLS')
 
         self.connectStatus = True
         return True
