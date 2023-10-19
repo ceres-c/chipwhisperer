@@ -1,6 +1,13 @@
+import datetime
+import time
+from typing import Sequence
+
 import pyvisa
+import numpy
 
 from .mso4hardware.triggers import MSO4Triggers, MSO4EdgeTrigger
+from chipwhisperer.logging import scope_logger
+from chipwhisperer.common.utils import util
 
 class MSO4:
     """Tektronix MSO 4-Series scope object.
@@ -15,17 +22,26 @@ class MSO4:
     _name = "ChipWhisperer/MSO4"
     sources = ['ch1', 'ch2', 'ch3', 'ch4'] # TODO add MATH_, REF_, CH_D...
     # See programmer manual § DATa:SOUrce
+    modes = ['sample', 'peakdetect', 'hires', 'average', 'envelope']
 
     def __init__(self):
         self.rm: pyvisa.ResourceManager = None # type: ignore
         self.sc: pyvisa.resources.MessageBasedResource = None # type: ignore
 
-        self.record_len = 0
-
         # Local storage for the internal trigger instance
         self._trig: MSO4Triggers = None # type: ignore
 
         self._src: str = None # type: ignore
+        self._mode: str = None # type: ignore
+        self._record_len: int = 0
+        self._timeout: float = 2.0
+
+        self._waveform_byte_nr: int = None # type: ignore
+        self._waveform_format: str = None # type: ignore
+        self._waveform_order: str = None # type: ignore
+        self._waveform_encoding: str = None # type: ignore
+
+        self.data_points: Sequence = None # type: ignore
 
         self.connectStatus = False
 
@@ -76,27 +92,50 @@ class MSO4:
 
         sc_id = self._id_scope()
         if sc_id['vendor'] != 'TEKTRONIX':
+            self.dis()
             raise OSError(f'Invalid vendor returned from scope {sc_id["vendor"]}')
         if sc_id['model'] not in ['MSO44', 'MSO46']:
+            self.dis()
             raise OSError(f'Invalid model returned from scope {sc_id["model"]}')
 
-        # Enable all events reporting in the status register
-        self.sc.write('DESE 255')
-        # Clear: Event Queue, Standard Event Status Register, Status Byte Register
-        self.sc.write('*CLS')
-        # Set waveform data format to binary (faster than ASCII)
-        self.sc.write('DATa:ENCdg RFBinary') # float msb first
-        # Set waveform data to 32-bit
-        self.sc.write('WFMOutpre:BYT_Nr 4')
-        # Get the record length
+        # Configure scope environment
         try:
-            self.record_len = int(self.sc.query('HORizontal:MODe:RECOrdlength?').strip())
+            # Enable all events reporting in the status register
+            self.sc.write('DESE 255')
+
+            # Clear: Event Queue, Standard Event Status Register, Status Byte Register
+            self.sc.write('*CLS')
         except Exception:
             self.dis()
             raise
-        # Set data start and stop (retrieve all data)
-        self.sc.write('DATA:START 1')
-        self.sc.write(f'DATA:STOP {self.record_len}')
+
+        # Configure waveform data
+        try:
+            # TODO Make these configurable. kwargs maybe?
+            # NOTE the DATA:ENCdg command is broken in the MSO44 firmware version 2.0.3.950
+
+            # Set waveform data format to binary
+            self.sc.write('WFMOutpre:ENCdg BINary')
+
+            # Set binary data format to signed integer
+            # NOTE FP seems to be rejected in the MSO44 firmware version 2.0.3.950
+            self.sc.write('WFMOutpre:BN_Fmt RI')
+
+            # Set Byte order to MSB
+            self.sc.write('WFMOutpre:BYT_Or MSB')
+
+            # Set waveform data to 16-bit
+            self.sc.write('WFMOutpre:BYT_Nr 2')
+
+            # Get the record length
+            self._record_len = int(self.sc.query('HORizontal:MODe:RECOrdlength?').strip())
+
+            # Set waveform start and stop (retrieve all data)
+            self.sc.write('DATA:START 1')
+            self.sc.write(f'DATA:STOP {self._record_len}')
+        except Exception:
+            self.dis()
+            raise
 
         self.connectStatus = True
         return True
@@ -128,40 +167,102 @@ class MSO4:
             raise OSError("Scope is not connected. Connect it first...")
 
         try:
+            self._waveform_byte_nr = int(self.sc.query('WFMOutpre:BYT_Nr?').strip())
+            self._waveform_format = self.sc.query('WFMOutpre:BN_Fmt?').strip().lower()
+            self._waveform_order = self.sc.query('WFMOutpre:BYT_Or?').strip().lower()
+            self._waveform_encoding = self.sc.query('WFMOutpre:ENCdg?').strip().lower()
+
             self.sc.write('ACQuire:STATE 1') # Acquire one trace
+
+            for _ in range(10):
+                if self.sc.query('ACQuire:STATE?').strip() == '1':
+                    break
+                time.sleep(0.05)
+            else:
+                raise OSError("Failed to arm scope")
         except Exception:
             self.dis()
             raise
 
-    def capture(self):
-        """Reads power trace data from the scope.
+    def capture(self, poll_done: bool = True):
+        """Captures trace. Scope must be armed before capturing.
 
+        Blocks until scope triggered (or times out),
+        then disarms scope and copies data back.
+
+        Read captured data out with :code:`scope.get_last_trace()`
+
+        Args:
+            poll_done: This only exists to make this function compatible
+            with the capture_trace() function in the ChipWhisperer API.
+            Will always poll the scope until it is done/times out.
         Returns:
-            False upon success and True upon failure
+           True if capture timed out, false if it didn't.
+
+        Raises:
+           IOError: Unknown failure.
         """
+        _ = poll_done = True
 
         if not self._src:
             raise ValueError("Must set waveform source before starting capture")
+        if not all([self._waveform_byte_nr, self._waveform_format, self._waveform_order, self._waveform_encoding]):
+            raise ValueError("Must arm scope before starting capture")
 
-        available = self.sc.query('DATa:SOUrce:AVAILable?').lower()
-        if 'none' in available:
-            return False
+        timeout = False
+        starttime = datetime.datetime.now()
 
-        # Read the preamble
-        preamble = self.sc.query('WFMOutpre').strip() # TODO how to use this?
+        # Wait for a trigger
+        while 'armed' in self.sc.query('TRIGger:STATE?').lower():
+            diff = datetime.datetime.now() - starttime
+            # If we've timed out, don't wait any longer for a trigger
+            if (diff.total_seconds() > self._timeout):
+                scope_logger.warning('Timeout in MSO4 capture(), no trigger seen! Trigger forced, data is invalid.')
+                timeout = True
+                self.sc.write('TRIGger FORCe')
+                break
+
+        # Wait for the data to be available
+        while 'none' in self.sc.query('DATa:SOUrce:AVAILable?').lower():
+            diff = datetime.datetime.now() - starttime
+            if (diff.total_seconds() > self._timeout):
+                scope_logger.warning('Timeout in MSO4 capture() waiting for DATa:SOUrce:AVAILable.')
+                timeout = True
+                return timeout
+        # If there is data available...
+
+        # Got these from the programmer manual § WFMOutpre:BN_Fmt
+        types = {
+            1: {'ri': 'b', 'rp': 'B'},
+            2: {'ri': 'h', 'rp': 'H'},
+            4: {'ri': 'i', 'rp': 'I', 'fp': 'f'},
+            8: {'ri': 'q', 'rp': 'Q', 'fp': 'd'},
+        }
 
         # Read the data
-        data = self.sc.query('CURVE?').strip()
+        if self._waveform_encoding == 'binary':
+            self.data_points = self.sc.query_binary_values(
+                'CURVE?',
+                datatype = types[self._waveform_byte_nr][self._waveform_format],
+                is_big_endian = self._waveform_order == 'msb',
+                container=numpy.array
+            )
+        else:
+            raise IOError("Unknown data encoding")
+            # TODO implement ASCII encoding
+            # values = self.sc.query('CURVE?').strip()
 
-        pass
+        return timeout
 
-    def get_last_trace(self):
+    def get_last_trace(self, as_int: bool = False):
         """Returns the scope data read by capture()
 
         Returns:
             A numpy array containing the scope data.
         """
-        pass
+        return self.data_points
+
+    getLastTrace = util.camel_case_deprecated(get_last_trace)
 
     @property
     def trig(self) -> MSO4Triggers:
@@ -174,8 +275,51 @@ class MSO4:
     def src(self) -> str:
         return self.sc.query('DATa:SOUrce?').strip()
     @src.setter
-    def src(self, src: str):
-        if src.lower() not in self.sources:
-            raise ValueError(f"Invalid source {src}. Valid sources are {self.sources}")
-        self._src = src
-        self.sc.write(f'DATa:SOUrce {src}')
+    def src(self, value: str):
+        if value.lower() not in self.sources:
+            raise ValueError(f"Invalid source {value}. Valid sources are {self.sources}")
+        self._src = value
+        self.sc.write(f'DATa:SOUrce {value}')
+
+    @property
+    def mode(self) -> str:
+        """The acquisition mode of the scope.
+
+        :Getter: Return the acquisition mode (str)
+
+        :Setter: Set the acquisition mode. Valid modes are:
+            * 'sample': SAMple specifies that the displayed data point value is the
+            sampled value that is taken during the acquisition interval
+            * 'peakdetect': PEAKdetect specifies the display of high-low range of the
+            samples taken from a single waveform acquisition.
+            * 'hires': HIRes specifies Hi Res mode where the displayed data point
+            value is the average of all the samples taken during the acquisition interval
+            * 'average': AVErage specifies averaging mode, in which the resulting
+            waveform shows an average of SAMple data points from several separate
+            waveform acquisitions.
+            * 'envelope': ENVelope specifies envelope mode, where the resulting waveform
+            displays the range of PEAKdetect from continued waveform acquisitions.
+        """
+        return self.sc.query('ACQuire:MODe?').strip()
+    @mode.setter
+    def mode(self, value: str):
+        if value.lower() not in self.modes:
+            raise ValueError(f"Invalid mode {value}. Valid modes are {self.modes}")
+        self._mode = value
+        self.sc.write(f'ACQuire:MODe {value}')
+
+    @property
+    def timeout(self) -> float:
+        """The number of seconds to wait before aborting a capture.
+
+        If no trigger event is detected before this time limit is up, the
+        capture fails and no data is returned.
+
+        :Getter: Return the number of seconds before a timeout (float)
+
+        :Setter: Set the timeout in seconds
+        """
+        return self._timeout
+    @timeout.setter
+    def timeout(self, value: float):
+        self._timeout = value
