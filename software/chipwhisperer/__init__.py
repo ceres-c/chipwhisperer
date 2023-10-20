@@ -483,10 +483,10 @@ def capture_trace(scope : scopes.ScopeTypes, target : targets.TargetTypes, plain
 
     import signal
 
+    scope.arm()
+
     if key:
         target.set_key(key, ack=ack, always_send=always_send_key)
-
-    scope.arm()
 
     if plaintext:
         target.simpleserial_write('p', plaintext)
