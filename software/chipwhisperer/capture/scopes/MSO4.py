@@ -9,17 +9,21 @@ from .mso4hardware.triggers import MSO4Triggers, MSO4EdgeTrigger
 from chipwhisperer.logging import scope_logger
 from chipwhisperer.common.utils import util
 
+# TODO:
+# * Implement the other trigger types (mostly sequence)
+# * How about rtn._getNAEUSB() called in chipwhisperer.__init__.scope()?
+
 class MSO4:
     """Tektronix MSO 4-Series scope object.
 
     Attributes:
         rm: pyvisa.ResourceManager instance
         sc: pyvisa.resources.MessageBasedResource instance
-        trig: MSO4Triggers type (not an instance)
+        trigger: MSO4Triggers type (not an instance)
         src (src): Source for the waveform data (e.g. 'CH1')
     """
 
-    _name = "ChipWhisperer/MSO4"
+    _name = 'ChipWhisperer/MSO4'
     sources = ['ch1', 'ch2', 'ch3', 'ch4'] # TODO add MATH_, REF_, CH_D...
     # See programmer manual § DATa:SOUrce
     modes = ['sample', 'peakdetect', 'hires', 'average', 'envelope']
@@ -61,7 +65,7 @@ class MSO4:
 
         s = idn.split(',')
         if len(s) != 4:
-            raise IOError("Invalid IDN string returned from scope")
+            raise OSError('Invalid IDN string returned from scope')
         return {
             'vendor': s[0],
             'model': s[1],
@@ -69,10 +73,11 @@ class MSO4:
             'firmware': s[3]
         }
 
-    def con(self, ip: str = "", trig_type: MSO4Triggers = MSO4EdgeTrigger, **kwargs) -> bool:
+    def con(self, sn = None, ip: str = '', trig_type: MSO4Triggers = MSO4EdgeTrigger, **kwargs) -> bool:
         """Connect to scope.
 
         Args:
+            sn (str): Ignored, but kept for compatibility with other scopes
             ip: IP address of scope
             kwargs: Additional arguments to pass to pyvisa.ResourceManager.open_resource
 
@@ -83,12 +88,14 @@ class MSO4:
             ValueError: IP address must be specified
             OSError: Invalid vendor or model returned from scope
         """
-        if ip == "":
-            raise ValueError("IP address must be specified")
+        _ = sn
+
+        if not ip:
+            raise ValueError('IP address must be specified')
 
         self.rm = pyvisa.ResourceManager()
         self.sc = self.rm.open_resource(f'TCPIP::{ip}::INSTR') # type: ignore
-        self.trig = trig_type
+        self.trigger = trig_type
 
         sc_id = self._id_scope()
         if sc_id['vendor'] != 'TEKTRONIX':
@@ -121,8 +128,8 @@ class MSO4:
             # NOTE FP seems to be rejected in the MSO44 firmware version 2.0.3.950
             self.sc.write('WFMOutpre:BN_Fmt RI')
 
-            # Set Byte order to MSB
-            self.sc.write('WFMOutpre:BYT_Or MSB')
+            # Set Byte order to LSB (easier to work with because numpy)
+            self.sc.write('WFMOutpre:BYT_Or LSB')
 
             # Set waveform data to 16-bit
             self.sc.write('WFMOutpre:BYT_Nr 2')
@@ -146,8 +153,6 @@ class MSO4:
         self.sc.close()
         self.rm.close()
 
-        self.trig = None # type: ignore
-
         self.connectStatus = False
         return True
 
@@ -164,7 +169,7 @@ class MSO4:
         """
 
         if self.connectStatus is False:
-            raise OSError("Scope is not connected. Connect it first...")
+            raise OSError('Scope is not connected. Connect it first...')
 
         try:
             self._waveform_byte_nr = int(self.sc.query('WFMOutpre:BYT_Nr?').strip())
@@ -179,7 +184,7 @@ class MSO4:
                     break
                 time.sleep(0.05)
             else:
-                raise OSError("Failed to arm scope")
+                raise OSError('Failed to arm scope')
         except Exception:
             self.dis()
             raise
@@ -205,9 +210,9 @@ class MSO4:
         _ = poll_done = True
 
         if not self._src:
-            raise ValueError("Must set waveform source before starting capture")
+            raise ValueError('Must set waveform source before starting capture')
         if not all([self._waveform_byte_nr, self._waveform_format, self._waveform_order, self._waveform_encoding]):
-            raise ValueError("Must arm scope before starting capture")
+            raise ValueError('Must arm scope before starting capture')
 
         timeout = False
         starttime = datetime.datetime.now()
@@ -248,7 +253,7 @@ class MSO4:
                 container=numpy.array
             )
         else:
-            raise IOError("Unknown data encoding")
+            raise IOError('Unknown data encoding')
             # TODO implement ASCII encoding
             # values = self.sc.query('CURVE?').strip()
 
@@ -265,10 +270,10 @@ class MSO4:
     getLastTrace = util.camel_case_deprecated(get_last_trace)
 
     @property
-    def trig(self) -> MSO4Triggers:
+    def trigger(self) -> MSO4Triggers:
         return self._trig
-    @trig.setter
-    def trig(self, trig_type: MSO4Triggers):
+    @trigger.setter
+    def trigger(self, trig_type: MSO4Triggers):
         self._trig = trig_type(self.sc)
 
     @property
@@ -277,7 +282,7 @@ class MSO4:
     @src.setter
     def src(self, value: str):
         if value.lower() not in self.sources:
-            raise ValueError(f"Invalid source {value}. Valid sources are {self.sources}")
+            raise ValueError(f'Invalid source {value}. Valid sources are {self.sources}')
         self._src = value
         self.sc.write(f'DATa:SOUrce {value}')
 
@@ -304,7 +309,7 @@ class MSO4:
     @mode.setter
     def mode(self, value: str):
         if value.lower() not in self.modes:
-            raise ValueError(f"Invalid mode {value}. Valid modes are {self.modes}")
+            raise ValueError(f'Invalid mode {value}. Valid modes are {self.modes}')
         self._mode = value
         self.sc.write(f'ACQuire:MODe {value}')
 
