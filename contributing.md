@@ -174,9 +174,7 @@ Building the documentation requires sphinx, sphinx images and pypandoc.
 This can be installed using
 
 ```bash
-    python -m pip install sphinx
-    python -m pip install sphinxcontrib-images
-    python -m pip install pypandoc
+    python -m pip install sphinx install sphinxcontrib-images sphinx-autodoc-typehints pypandoc
 ```
 
 You can then navigate to the `chipwhisperer/docs` folder and run

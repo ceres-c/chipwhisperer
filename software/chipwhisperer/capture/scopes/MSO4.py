@@ -5,6 +5,8 @@ from typing import Sequence
 import pyvisa
 import numpy
 
+from pyvisa import constants
+
 from .mso4hardware.triggers import MSO4Triggers, MSO4EdgeTrigger
 from chipwhisperer.logging import scope_logger
 from chipwhisperer.common.utils import util
@@ -13,6 +15,11 @@ from chipwhisperer.common.utils import util
 # * Implement the other trigger types (mostly sequence)
 # * How about rtn._getNAEUSB() called in chipwhisperer.__init__.scope()?
 # * Move all waveform configuration to a separate class
+#   - Waveform on/off!
+# * Add note about starting off with a freshly booted machine to avoid issues
+# * Hi/low res config property
+#   - Change binary format to 8 bit when in low res mode?
+# * Run/stop vs single/sequence config property
 
 class MSO4:
     """Tektronix MSO 4-Series scope object.
@@ -43,7 +50,6 @@ class MSO4:
         self._src: str = None # type: ignore
         self._mode: str = None # type: ignore
         self._record_len: int = 0
-        self._timeout: float = 2.0
 
         self._cached_wfm_byte_nr: int = 0
         self._cached_wfm_format: str = ''
@@ -89,8 +95,17 @@ class MSO4:
             'firmware': s[3]
         }
 
-    def con(self, sn = None, ip: str = '', trig_type: MSO4Triggers = MSO4EdgeTrigger, **kwargs) -> bool:
-        """Connect to scope.
+    def con(self, sn = None, ip: str = '', trig_type: MSO4Triggers = MSO4EdgeTrigger, socket: bool = True, **kwargs) -> bool:
+        """Connect to scope and set default configuration:
+            - timeout = 2000 ms
+            - event reporting enabled on all events
+            - clear event queue, standard event status register, status byte register
+            - waveform start = 1
+            - waveform length = max (record length)
+            - waveform encoding = binary
+            - waveform binary format = signed integer
+            - waveform byte order = lsb
+            - waveform byte number = 2
 
         Args:
             sn (str): Ignored, but kept for compatibility with other scopes
@@ -110,8 +125,18 @@ class MSO4:
             raise ValueError('IP address must be specified')
 
         self.rm = pyvisa.ResourceManager()
-        self.sc = self.rm.open_resource(f'TCPIP::{ip}::INSTR') # type: ignore
+        if socket:
+            self.sc = self.rm.open_resource(f'TCPIP::{ip}::4000::SOCKET') # type: ignore
+            self.sc.read_termination = '\n'
+            self.sc.write_termination = '\n'
+        else:
+            self.sc = self.rm.open_resource(f'TCPIP::{ip}::INSTR') # type: ignore
+
+        self.sc.clear() # Clear buffers
         self.trigger = trig_type
+
+        # Set visa timeout
+        self.timeout = 2000 # ms
 
         sc_id = self._id_scope()
         if sc_id['vendor'] != 'TEKTRONIX':
@@ -128,13 +153,8 @@ class MSO4:
 
             # Clear: Event Queue, Standard Event Status Register, Status Byte Register
             self.sc.write('*CLS')
-        except Exception:
-            self.dis()
-            raise
 
-        # Configure waveform data
-        try:
-            # TODO Make these configurable. kwargs maybe?
+            # Configure waveform data
             # NOTE the DATA:ENCdg command is broken in the MSO44 firmware version 2.0.3.950
             self.wfm_encoding = 'binary'
             self.wfm_binary_format = 'ri' # Signed integer
@@ -148,6 +168,12 @@ class MSO4:
             # Set waveform start and stop (retrieve all data)
             self.sc.write('DATA:START 1')
             self.sc.write(f'DATA:STOP {self._record_len}')
+
+            # Turn off waveform display
+            # Or else the scope will simply DIE after ~20 captures (:
+            self.sc.write('DISplay:WAVEform off')  # TODO define this as a property
+
+            # TODO set acquisition mode to single/sequence
         except Exception:
             self.dis()
             raise
@@ -158,6 +184,9 @@ class MSO4:
     def dis(self) -> bool:
         """Disconnect from scope.
         """
+        # Re enable waveform display
+        self.sc.write('DISplay:WAVEform on')
+
         self.sc.close()
         self.rm.close()
 
@@ -182,8 +211,11 @@ class MSO4:
         try:
             self.sc.write('ACQuire:STATE 1') # Acquire one trace
 
+            # Wait for the scope to arm
             for _ in range(10):
-                if self.sc.query('ACQuire:STATE?').strip() == '1':
+                state = self.sc.query('ACQuire:STATE?').strip()
+                if '1' in state:
+                    # But is it really armed? Read at the end of the function...
                     break
                 time.sleep(0.05)
             else:
@@ -191,6 +223,9 @@ class MSO4:
         except Exception:
             self.dis()
             raise
+        time.sleep(0.05) # Wait for the scope to *actually* arm
+        # Tektronix is playing games with us
+
 
     def capture(self, poll_done: bool = True):
         """Captures trace. Scope must be armed before capturing.
@@ -210,7 +245,7 @@ class MSO4:
         Raises:
            IOError: Unknown failure.
         """
-        _ = poll_done = True
+        _ = poll_done
 
         if not self._src:
             raise ValueError('Must set waveform source before starting capture')
@@ -219,25 +254,7 @@ class MSO4:
 
         timeout = False
         starttime = datetime.datetime.now()
-
-        # Wait for a trigger
-        while 'armed' in self.sc.query('TRIGger:STATE?').lower():
-            diff = datetime.datetime.now() - starttime
-            # If we've timed out, don't wait any longer for a trigger
-            if (diff.total_seconds() > self._timeout):
-                scope_logger.warning('Timeout in MSO4 capture(), no trigger seen! Trigger forced, data is invalid.')
-                timeout = True
-                self.sc.write('TRIGger FORCe')
-                break
-
-        # Wait for the data to be available
-        while 'none' in self.sc.query('DATa:SOUrce:AVAILable?').lower():
-            diff = datetime.datetime.now() - starttime
-            if (diff.total_seconds() > self._timeout):
-                scope_logger.warning('Timeout in MSO4 capture() waiting for DATa:SOUrce:AVAILable.')
-                timeout = True
-                return timeout
-        # If there is data available...
+        self.starttime = starttime # TODO remove
 
         # Got these from the programmer manual § WFMOutpre:BN_Fmt
         types = {
@@ -247,18 +264,44 @@ class MSO4:
             8: {'ri': 'q', 'rp': 'Q', 'fp': 'd'},
         }
 
+        # Wait for a trigger
+        while 'armed' in self.sc.query('TRIGger:STATE?').lower():
+            diff = datetime.datetime.now() - starttime
+            # If we've timed out, don't wait any longer for a trigger
+            if diff.total_seconds() > (self.timeout / 1000):
+                scope_logger.warning('Timeout in MSO4 capture(), no trigger seen! Trigger forced, data is invalid.')
+                timeout = True
+                self.sc.write('TRIGger FORCe')
+                break
+
+        # Wait for the data to be available
+        while 'none' in self.sc.query('DATa:SOUrce:AVAILable?').lower():
+            diff = datetime.datetime.now() - starttime
+            if diff.total_seconds() > (self.timeout / 1000):
+                scope_logger.warning('Timeout in MSO4 capture() waiting for DATa:SOUrce:AVAILable.')
+                timeout = True
+                return timeout
+        # If there is data available...
+
         # Read the data
-        if self.wfm_encoding == 'binary':
-            self.wfm_data_points = self.sc.query_binary_values(
-                'CURVE?',
-                datatype = types[self.wfm_byte_nr][self.wfm_binary_format],
-                is_big_endian = self.wfm_byte_order == 'msb',
-                container=numpy.array
-            )
-        else:
-            raise IOError('Unknown data encoding')
-            # TODO implement ASCII encoding
-            # values = self.sc.query('CURVE?').strip()
+        try:
+            if self.wfm_encoding == 'binary':
+                self.wfm_data_points = self.sc.query_binary_values(
+                    'CURVE?',
+                    datatype = types[self.wfm_byte_nr][self.wfm_binary_format],
+                    is_big_endian = self.wfm_byte_order == 'msb',
+                    container=numpy.array
+                )
+            else:
+                raise IOError('Unknown data encoding')
+                # TODO implement ASCII encoding
+                # values = self.sc.query('CURVE?').strip()
+        except pyvisa.errors.VisaIOError as e:
+            if e.error_code == constants.StatusCode.error_timeout:
+                timeout = True
+            else:
+                raise
+        self.endtime = datetime.datetime.now() # TODO remove
 
         return timeout
 
@@ -318,19 +361,16 @@ class MSO4:
 
     @property
     def timeout(self) -> float:
-        """The number of seconds to wait before aborting a capture.
+        """Timeout (in ms) for each VISA operation, including the CURVE? query.
 
-        If no trigger event is detected before this time limit is up, the
-        capture fails and no data is returned.
+        :Getter: Return the number of milliseconds before a timeout (float)
 
-        :Getter: Return the number of seconds before a timeout (float)
-
-        :Setter: Set the timeout in seconds
+        :Setter: Set the timeout in milliseconds (float)
         """
-        return self._timeout
+        return self.sc.timeout
     @timeout.setter
     def timeout(self, value: float):
-        self._timeout = value
+        self.sc.timeout = value
 
     @property
     def wfm_encoding(self) -> str:
