@@ -8,37 +8,30 @@ import numpy
 from pyvisa import constants
 
 from .mso4hardware.triggers import MSO4Triggers, MSO4EdgeTrigger
+from .mso4hardware.acquisition import MSO4Acquisition
 from chipwhisperer.logging import scope_logger
 from chipwhisperer.common.utils import util
 
 # TODO:
+# * Enable/disable channels
 # * Implement the other trigger types (mostly sequence)
 # * How about rtn._getNAEUSB() called in chipwhisperer.__init__.scope()?
-# * Move all waveform configuration to a separate class
-#   - Waveform on/off!
+# * Change binary format to 8 bit when in low res mode?
 # * Add note about starting off with a freshly booted machine to avoid issues
-# * Hi/low res config property
-#   - Change binary format to 8 bit when in low res mode?
-# * Run/stop vs single/sequence config property
+# * Add note in readme about "smart" Dell docking stations and ethernet
 
 class MSO4:
-    """Tektronix MSO 4-Series scope object.
+    '''Tektronix MSO 4-Series scope object. This is not usable until `con()` is called.
 
     Attributes:
         rm: pyvisa.ResourceManager instance
         sc: pyvisa.resources.MessageBasedResource instance
         trigger: MSO4Triggers type (not an instance)
-        src (src): Source for the waveform data (e.g. 'CH1')
-    """
+    '''
 
     _name = 'ChipWhisperer/MSO4'
     sources = ['ch1', 'ch2', 'ch3', 'ch4'] # TODO add MATH_, REF_, CH_D...
     # See programmer manual § DATa:SOUrce
-    modes = ['sample', 'peakdetect', 'hires', 'average', 'envelope']
-    wfm_encodings = ['binary', 'ascii']
-    wfm_binary_formats = ['ri', 'rp', 'fp']
-    wfm_byte_nrs = [1, 2, 8] # Programmer manual § WFMOutpre:BYT_Nr
-    wfm_byte_orders = ['lsb', 'msb']
 
     def __init__(self):
         self.rm: pyvisa.ResourceManager = None # type: ignore
@@ -46,38 +39,29 @@ class MSO4:
 
         # Local storage for the internal trigger instance
         self._trig: MSO4Triggers = None # type: ignore
-
-        self._src: str = None # type: ignore
-        self._mode: str = None # type: ignore
-        self._record_len: int = 0
-
-        self._cached_wfm_byte_nr: int = 0
-        self._cached_wfm_format: str = ''
-        self._cached_wfm_order: str = ''
-        self._cached_wfm_encoding: str = ''
+        self.acq: MSO4Acquisition = None # type: ignore
 
         self.wfm_data_points: Sequence = []
 
         self.connectStatus = False
 
-    def _clear_cache(self) -> None:
-        """Resets the local configuration cache and fetches updated values from
+    def clear_cache(self) -> None:
+        '''Resets the local configuration cache so that values will be fetched from
         the scope.
 
         This is useful when the scope configuration is (potentially) changed externally.
-        """
-        self._cached_wfm_byte_nr = 0
-        self._cached_wfm_format = ''
-        self._cached_wfm_order = ''
-        self._cached_wfm_encoding = ''
+        '''
+        self._trig.clear_caches()
+        self.acq.clear_caches()
+        self.wfm_data_points = []
 
     def _id_scope(self) -> dict:
-        """Read identification string from scope
+        '''Read identification string from scope
 
         Raises:
             Exception: Error when arming. This method catches these and
                 disconnects before reraising them.
-        """
+        '''
 
         try:
             idn = self.sc.query('*IDN?') # TEKTRONIX,MSO44,C019654,CF:91.1CT FV:2.0.3.950
@@ -96,8 +80,9 @@ class MSO4:
         }
 
     def con(self, sn = None, ip: str = '', trig_type: MSO4Triggers = MSO4EdgeTrigger, socket: bool = True, **kwargs) -> bool:
-        """Connect to scope and set default configuration:
+        '''Connect to scope and set default configuration:
             - timeout = 2000 ms
+            - single sequence mode
             - event reporting enabled on all events
             - clear event queue, standard event status register, status byte register
             - waveform start = 1
@@ -109,7 +94,8 @@ class MSO4:
 
         Args:
             sn (str): Ignored, but kept for compatibility with other scopes
-            ip: IP address of scope
+            ip (str): IP address of scope
+            socket (bool): Use socket connection instead of VISA
             kwargs: Additional arguments to pass to pyvisa.ResourceManager.open_resource
 
         Returns:
@@ -118,7 +104,7 @@ class MSO4:
         Raises:
             ValueError: IP address must be specified
             OSError: Invalid vendor or model returned from scope
-        """
+        '''
         _ = sn
 
         if not ip:
@@ -131,12 +117,7 @@ class MSO4:
             self.sc.write_termination = '\n'
         else:
             self.sc = self.rm.open_resource(f'TCPIP::{ip}::INSTR') # type: ignore
-
         self.sc.clear() # Clear buffers
-        self.trigger = trig_type
-
-        # Set visa timeout
-        self.timeout = 2000 # ms
 
         sc_id = self._id_scope()
         if sc_id['vendor'] != 'TEKTRONIX':
@@ -146,6 +127,13 @@ class MSO4:
             self.dis()
             raise OSError(f'Invalid model returned from scope {sc_id["model"]}')
 
+        # Set visa timeout
+        self.timeout = 2000 # ms
+
+        # Init additional scope classes
+        self.trigger = trig_type
+        self.acq = MSO4Acquisition(self.sc)
+
         # Configure scope environment
         try:
             # Enable all events reporting in the status register
@@ -154,24 +142,25 @@ class MSO4:
             # Clear: Event Queue, Standard Event Status Register, Status Byte Register
             self.sc.write('*CLS')
 
+            # Set single sequence mode
+            self.acq.stop_after = 'sequence'
+            self.acq.num_seq = 1
+
             # Configure waveform data
             # NOTE the DATA:ENCdg command is broken in the MSO44 firmware version 2.0.3.950
-            self.wfm_encoding = 'binary'
-            self.wfm_binary_format = 'ri' # Signed integer
+            self.acq.wfm_encoding = 'binary'
+            self.acq.wfm_binary_format = 'ri' # Signed integer
             # NOTE floating point seems to be rejected in the MSO44 firmware version 2.0.3.950
-            self.wfm_byte_order = 'lsb' # Easier to work with little endian because numpy
-            self.wfm_byte_nr = 2 # 16-bit
-
-            # Get the record length
-            self._record_len = int(self.sc.query('HORizontal:MODe:RECOrdlength?').strip())
+            self.acq.wfm_byte_order = 'lsb' # Easier to work with little endian because numpy
+            self.acq.wfm_byte_nr = 2 # 16-bit
 
             # Set waveform start and stop (retrieve all data)
-            self.sc.write('DATA:START 1')
-            self.sc.write(f'DATA:STOP {self._record_len}')
+            self.acq.wfm_start = 1
+            self.acq.wfm_stop = self.acq.horiz_record_length
 
             # Turn off waveform display
             # Or else the scope will simply DIE after ~20 captures (:
-            self.sc.write('DISplay:WAVEform off')  # TODO define this as a property
+            self.acq.display = False
 
             # TODO set acquisition mode to single/sequence
         except Exception:
@@ -182,10 +171,10 @@ class MSO4:
         return True
 
     def dis(self) -> bool:
-        """Disconnect from scope.
-        """
+        '''Disconnect from scope.
+        '''
         # Re enable waveform display
-        self.sc.write('DISplay:WAVEform on')
+        self.acq.display = True
 
         self.sc.close()
         self.rm.close()
@@ -194,7 +183,7 @@ class MSO4:
         return True
 
     def arm(self) -> None:
-        """Setup scope to begin capture/glitching when triggered.
+        '''Setup scope to begin capture/glitching when triggered.
 
         The scope must be armed before capture or glitching (when set to
         'ext_single') can begin.
@@ -203,7 +192,7 @@ class MSO4:
             OSError: Scope isn't connected.
             Exception: Error when arming. This method catches these and
                 disconnects before reraising them.
-        """
+        '''
 
         if self.connectStatus is False:
             raise OSError('Scope is not connected. Connect it first...')
@@ -228,7 +217,7 @@ class MSO4:
 
 
     def capture(self, poll_done: bool = True):
-        """Captures trace. Scope must be armed before capturing.
+        '''Captures trace. Scope must be armed before capturing.
 
         Blocks until scope triggered (or times out),
         then disarms scope and copies data back.
@@ -244,13 +233,10 @@ class MSO4:
 
         Raises:
            IOError: Unknown failure.
-        """
+        '''
         _ = poll_done
 
-        if not self._src:
-            raise ValueError('Must set waveform source before starting capture')
-        if not all([self.wfm_byte_nr, self.wfm_binary_format, self.wfm_byte_order, self.wfm_encoding]):
-            raise ValueError('Must arm scope before starting capture')
+        self.acq.configured() # Check that the scope is configured
 
         timeout = False
         starttime = datetime.datetime.now()
@@ -273,6 +259,7 @@ class MSO4:
                 timeout = True
                 self.sc.write('TRIGger FORCe')
                 break
+        self.armtime = datetime.datetime.now() # TODO remove
 
         # Wait for the data to be available
         while 'none' in self.sc.query('DATa:SOUrce:AVAILable?').lower():
@@ -282,14 +269,15 @@ class MSO4:
                 timeout = True
                 return timeout
         # If there is data available...
+        self.availabletime = datetime.datetime.now() # TODO remove
 
         # Read the data
         try:
-            if self.wfm_encoding == 'binary':
+            if self.acq.wfm_encoding == 'binary':
                 self.wfm_data_points = self.sc.query_binary_values(
                     'CURVE?',
-                    datatype = types[self.wfm_byte_nr][self.wfm_binary_format],
-                    is_big_endian = self.wfm_byte_order == 'msb',
+                    datatype = types[self.acq.wfm_byte_nr][self.acq.wfm_binary_format],
+                    is_big_endian = self.acq.wfm_byte_order == 'msb',
                     container=numpy.array
                 )
             else:
@@ -306,11 +294,11 @@ class MSO4:
         return timeout
 
     def get_last_trace(self, as_int: bool = False):
-        """Returns the scope data read by capture()
+        '''Returns the scope data read by capture()
 
         Returns:
             A numpy array containing the scope data.
-        """
+        '''
         return self.wfm_data_points
 
     getLastTrace = util.camel_case_deprecated(get_last_trace)
@@ -323,150 +311,14 @@ class MSO4:
         self._trig = trig_type(self.sc)
 
     @property
-    def src(self) -> str:
-        return self.sc.query('DATa:SOUrce?').strip()
-    @src.setter
-    def src(self, value: str):
-        if value.lower() not in self.sources:
-            raise ValueError(f'Invalid source {value}. Valid sources are {self.sources}')
-        self._src = value
-        self.sc.write(f'DATa:SOUrce {value}')
-
-    @property
-    def mode(self) -> str:
-        """The acquisition mode of the scope.
-
-        :Getter: Return the acquisition mode (str)
-
-        :Setter: Set the acquisition mode. Valid modes are:
-            * 'sample': SAMple specifies that the displayed data point value is the
-            sampled value that is taken during the acquisition interval
-            * 'peakdetect': PEAKdetect specifies the display of high-low range of the
-            samples taken from a single waveform acquisition.
-            * 'hires': HIRes specifies Hi Res mode where the displayed data point
-            value is the average of all the samples taken during the acquisition interval
-            * 'average': AVErage specifies averaging mode, in which the resulting
-            waveform shows an average of SAMple data points from several separate
-            waveform acquisitions.
-            * 'envelope': ENVelope specifies envelope mode, where the resulting waveform
-            displays the range of PEAKdetect from continued waveform acquisitions.
-        """
-        return self.sc.query('ACQuire:MODe?').strip()
-    @mode.setter
-    def mode(self, value: str):
-        if value.lower() not in self.modes:
-            raise ValueError(f'Invalid mode {value}. Valid modes are {self.modes}')
-        self._mode = value
-        self.sc.write(f'ACQuire:MODe {value}')
-
-    @property
     def timeout(self) -> float:
-        """Timeout (in ms) for each VISA operation, including the CURVE? query.
+        '''Timeout (in ms) for each VISA operation, including the CURVE? query.
 
         :Getter: Return the number of milliseconds before a timeout (float)
 
         :Setter: Set the timeout in milliseconds (float)
-        """
+        '''
         return self.sc.timeout
     @timeout.setter
     def timeout(self, value: float):
         self.sc.timeout = value
-
-    @property
-    def wfm_encoding(self) -> str:
-        """The encoding of the waveform data.
-
-        :Getter: Return the encoding (str)
-
-        :Setter: Set the encoding. Valid values are:
-            * 'binary': Binary
-            * 'ascii': ASCII
-
-        Raises:
-            ValueError: Invalid encoding
-        """
-        if not self._cached_wfm_encoding:
-            self._cached_wfm_encoding = self.sc.query('WFMOutpre:ENCdg?').strip().lower()
-        return self._cached_wfm_encoding
-    @wfm_encoding.setter
-    def wfm_encoding(self, value: str):
-        if value.lower() not in self.wfm_encodings:
-            raise ValueError(f'Invalid encoding {value}. Valid encodings are {self.wfm_encodings}')
-        if self._cached_wfm_encoding == value:
-            return
-        self._cached_wfm_encoding = value
-        self.sc.write(f'WFMOutpre:ENCdg {value}')
-
-    @property # WFMOutpre:BN_Fmt
-    def wfm_binary_format(self) -> str:
-        """The data format of binary waveform data.
-
-        :Getter: Return the data format (str)
-
-        :Setter: Set the data format. Valid values are:
-            * 'ri': Signed integer
-            * 'rp': Unsigned integer
-            * 'fp': Floating point
-
-        Raises:
-            ValueError: Invalid data format
-        """
-        if not self._cached_wfm_format:
-            self._cached_wfm_format = self.sc.query('WFMOutpre:BN_Fmt?').strip().lower()
-        return self._cached_wfm_format
-    @wfm_binary_format.setter
-    def wfm_binary_format(self, value: str):
-        if value.lower() not in self.wfm_binary_formats:
-            raise ValueError(f'Invalid binary format {value}. Valid binary formats are {self.wfm_binary_formats}')
-        if self._cached_wfm_format == value:
-            return
-        self._cached_wfm_format = value
-        self.sc.write(f'WFMOutpre:BN_Fmt {value}')
-
-    @property
-    def wfm_byte_nr(self) -> int:
-        """The number of bytes per data point in the waveform.
-
-        :Getter: Return the number of bytes per data point (int)
-
-        :Setter: Set the number of bytes per data point (int)
-            NOTE: Check the programmer manual for valid values § WFMOutpre:BYT_Nr. If unsure, clear the cache with :code:`scope._clear_cache()` and read back the value
-        """
-        if not self._cached_wfm_byte_nr:
-            self._cached_wfm_byte_nr = int(self.sc.query('WFMOutpre:BYT_Nr?').strip())
-        return self._cached_wfm_byte_nr
-    @wfm_byte_nr.setter
-    def wfm_byte_nr(self, value: int):
-        if not isinstance(value, int):
-            raise ValueError(f'Invalid number of bytes per data point {value}. Must be an int.')
-        if value not in self.wfm_byte_nrs:
-            raise ValueError(f'Invalid number of bytes per data point {value}. Valid values are {self.wfm_byte_nrs}')
-        if self._cached_wfm_byte_nr == value:
-            return
-        self._cached_wfm_byte_nr = value
-        self.sc.write(f'WFMOutpre:BYT_Nr {value}')
-
-    @property
-    def wfm_byte_order(self) -> str:
-        """The byte order of the waveform data.
-
-        :Getter: Return the byte order (str)
-
-        :Setter: Set the byte order. Valid values are:
-            * 'lsb': Least significant byte first
-            * 'msb': Most significant byte first
-
-        Raises:
-            ValueError: Invalid byte order
-        """
-        if not self._cached_wfm_order:
-            self._cached_wfm_order = self.sc.query('WFMOutpre:BYT_Or?').strip().lower()
-        return self._cached_wfm_order
-    @wfm_byte_order.setter
-    def wfm_byte_order(self, value: str):
-        if value.lower() not in self.wfm_byte_orders:
-            raise ValueError(f'Invalid byte order {value}. Valid byte orders are {self.wfm_byte_orders}')
-        if self._cached_wfm_order == value:
-            return
-        self._cached_wfm_order = value
-        self.sc.write(f'WFMOutpre:BYT_Or {value}')

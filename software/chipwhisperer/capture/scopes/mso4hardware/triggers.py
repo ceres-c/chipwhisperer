@@ -6,7 +6,7 @@ from chipwhisperer.common.utils import util
 from chipwhisperer.logging import scope_logger
 
 class MSO4TriggerBase(util.DisableNewAttr):
-    """Base trigger for the MSO 4-Series, used for settings shared by
+    '''Base trigger for the MSO 4-Series, used for settings shared by
     all trigger types
 
     Attributes:
@@ -20,7 +20,7 @@ class MSO4TriggerBase(util.DisableNewAttr):
                   the scope. Most likely, you just want to use MSO4SequenceTrigger
                   instead of touching this.
         mode: The trigger mode (auto/normal)
-    """
+    '''
 
     _name = "ChipWhisperer/MSO4BaseTrigger"
 
@@ -48,7 +48,12 @@ class MSO4TriggerBase(util.DisableNewAttr):
         self._cached_level = None
         self._cached_mode = None
 
-    def _clear_caches(self):
+    def clear_caches(self):
+        '''Resets the local configuration cache so that values will be fetched from
+        the scope.
+
+        This is useful when the scope configuration is (potentially) changed externally.
+        '''
         self._cached_source = None
         self._cached_coupling = None
         self._cached_level = None
@@ -70,10 +75,10 @@ class MSO4TriggerBase(util.DisableNewAttr):
 
     @property
     def source(self):
-        """The source of the event currently configured as a trigger.
+        '''The source of the event currently configured as a trigger.
         Raises:
             ValueError: if value is not one of the allowed strings
-        """
+        '''
         return self._get_source()
     @source.setter
     def source(self, src: str):
@@ -93,10 +98,10 @@ class MSO4TriggerBase(util.DisableNewAttr):
 
     @property
     def coupling(self):
-        """The coupling of the trigger source.
+        '''The coupling of the trigger source.
         Raises:
             ValueError: if value is not one of the allowed strings
-        """
+        '''
         return self._get_coupling()
     @coupling.setter
     def coupling(self, coupling: str):
@@ -131,10 +136,10 @@ class MSO4TriggerBase(util.DisableNewAttr):
 
     @property
     def level(self):
-        """The trigger level.
+        '''The trigger level.
         Raises:
             ValueError: if value is not a float
-        """
+        '''
         return self._get_level()
     @level.setter
     def level(self, level: float):
@@ -154,11 +159,11 @@ class MSO4TriggerBase(util.DisableNewAttr):
 
     @property
     def mode(self):
-        """The trigger mode (auto/normal).
+        '''The trigger mode (auto/normal).
         Raises:
             NotImplementedError: if trigger event is not A
             ValueError: if value is not one of the allowed strings
-        """
+        '''
         if self.event != 'A':
             raise NotImplementedError('Trigger mode is only supported for event A.')
         return self._get_mode()
@@ -171,7 +176,7 @@ class MSO4TriggerBase(util.DisableNewAttr):
         self._set_mode(mode)
 
 class MSO4EdgeTrigger(MSO4TriggerBase):
-    """Edge trigger
+    '''Edge trigger
 
     Attributes:
         source: The source of the event currently configured as a trigger.
@@ -183,7 +188,7 @@ class MSO4EdgeTrigger(MSO4TriggerBase):
             NOTE: Most likely, you just want to use MSO4SequenceTrigger instead of this.
         mode: The trigger mode (auto/normal)
         edge_slope: The edge slope (rise/fall/either)
-    """
+    '''
 
     _name = "ChipWhisperer/MSO4EdgeTrigger"
     _type = 'EDGE'
@@ -196,8 +201,8 @@ class MSO4EdgeTrigger(MSO4TriggerBase):
         self._cached_edge_slope = None
         self.disable_newattr()
 
-    def _clear_caches(self):
-        super()._clear_caches()
+    def clear_caches(self):
+        super().clear_caches()
         self._cached_edge_slope = None
 
     def _get_edge_slope(self) -> str:
@@ -212,10 +217,10 @@ class MSO4EdgeTrigger(MSO4TriggerBase):
 
     @property
     def edge_slope(self):
-        """The edge slope (rise/fall/either).
+        '''The edge slope (rise/fall/either).
         Raises:
             ValueError: if value is not one of the allowed strings
-        """
+        '''
         return self._get_edge_slope()
     @edge_slope.setter
     def edge_slope(self, slope: str):
@@ -224,7 +229,7 @@ class MSO4EdgeTrigger(MSO4TriggerBase):
         self._set_edge_slope(slope)
 
 class MSO4WidthTrigger(MSO4TriggerBase):
-    """Pulse Width trigger
+    '''Pulse Width trigger
 
     Attributes:
         typ: The type of event to use as a trigger.
@@ -239,7 +244,7 @@ class MSO4WidthTrigger(MSO4TriggerBase):
         highlimit (float): The high limit of the pulse width.
         when (str): When to trigger (lessthan/morethan/equal/unequal/within/outside)
         polarity (str): The polarity of the pulse (positive/negative)
-    """
+    '''
 
     _name = "ChipWhisperer/MSO4WidthTrigger"
     _type = 'WIDth'
@@ -253,8 +258,8 @@ class MSO4WidthTrigger(MSO4TriggerBase):
         self._cached_limit = None
         self.disable_newattr()
 
-    def _clear_caches(self):
-        super()._clear_caches()
+    def clear_caches(self):
+        super().clear_caches()
         self._cached_when = None
         self._cached_limit = None
 
