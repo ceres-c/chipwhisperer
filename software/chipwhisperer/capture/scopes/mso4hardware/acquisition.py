@@ -65,6 +65,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def mode(self) -> str:
         '''The acquisition mode of the scope.
+        Not cached
 
         :Getter: Return the acquisition mode (str)
 
@@ -81,17 +82,17 @@ class MSO4Acquisition(util.DisableNewAttr):
             * 'envelope': ENVelope specifies envelope mode, where the resulting waveform
             displays the range of PEAKdetect from continued waveform acquisitions.
         '''
-        return self.sc.query('ACQuire:MODe?').strip()
+        return self.sc.query('ACQuire:MODe?').strip().lower()
     @mode.setter
     def mode(self, value: str):
         if value.lower() not in self.modes:
             raise ValueError(f'Invalid mode {value}. Valid modes are {self.modes}')
-        self._mode = value
         self.sc.write(f'ACQuire:MODe {value}')
 
     @property
     def stop_after(self) -> str:
         '''Wether the instrument continually acquires acquisitions or acquires a single sequence
+        Not cached
 
         :Getter: Return the acquisition mode (str)
 
@@ -100,18 +101,18 @@ class MSO4Acquisition(util.DisableNewAttr):
             * 'runstop': specifies that the instrument will continually acquire data, if
             ACQuire:STATE is turned on.
         '''
-        return self.sc.query('ACQuire:STOPAfter?').strip()
+        return self.sc.query('ACQuire:STOPAfter?').strip().lower()
     @stop_after.setter
     def stop_after(self, value: str):
         if value.lower() not in self.stop_afters:
             raise ValueError(f'Invalid stop after {value}. Valid stop afters are {self.stop_afters}')
-        self._stop_after = value
         self.sc.write(f'ACQuire:STOPAfter {value}')
 
     @property
     def num_seq(self) -> int:
         '''In single sequence acquisition mode, specify the number of acquisitions or measurements
         that comprise the sequence.
+        Not cached
 
         :Getter: Return the number of acquisitions or measurements (int)
 
@@ -130,6 +131,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def display(self) -> bool:
         '''Enable or disable the waveform display on the scope display.
+        Not cached
 
         :Getter: Return the display state (bool)
 
@@ -143,6 +145,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def horiz_record_length(self) -> int:
         '''The horizontal record length of the waveform.
+        Not cached
 
         :Getter: Return the record length (int)
 
@@ -158,6 +161,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def wfm_src(self) -> list[str]:
         '''The analog FlexChannel(s) source(s) of the waveform.
+        Not cached
 
         :Getter: Return the source (str)
 
@@ -173,12 +177,12 @@ class MSO4Acquisition(util.DisableNewAttr):
         for v in value:
             if v.lower() not in self.sources:
                 raise ValueError(f'Invalid source {v}. Valid sources are {self.sources}')
-        self._src = value
         self.sc.write(f'DATa:SOUrce {" ".join(value)}')
 
     @property
     def wfm_start(self) -> int:
         '''The starting data point for waveform transfer.
+        Not cached
 
         :Getter: Return the start index (int)
 
@@ -194,6 +198,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def wfm_stop(self) -> int:
         '''The last data point that will be transferred when using the CURVe? query.
+        Not cached
 
         :Getter: Return the stop index (int)
 
@@ -209,6 +214,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def wfm_encoding(self) -> str:
         '''The encoding of the waveform data.
+        Cached
 
         :Getter: Return the encoding (str)
 
@@ -234,6 +240,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def wfm_binary_format(self) -> str:
         '''The data format of binary waveform data.
+        Cached
 
         :Getter: Return the data format (str)
 
@@ -260,6 +267,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def wfm_byte_nr(self) -> int:
         '''The number of bytes per data point in the waveform.
+        Cached
 
         :Getter: Return the number of bytes per data point (int)
 
@@ -283,6 +291,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     @property
     def wfm_byte_order(self) -> str:
         '''The byte order of the waveform data.
+        Cached
 
         :Getter: Return the byte order (str)
 

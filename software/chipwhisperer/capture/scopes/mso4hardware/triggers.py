@@ -76,6 +76,8 @@ class MSO4TriggerBase(util.DisableNewAttr):
     @property
     def source(self):
         '''The source of the event currently configured as a trigger.
+        Cached
+
         Raises:
             ValueError: if value is not one of the allowed strings
         '''
@@ -99,6 +101,8 @@ class MSO4TriggerBase(util.DisableNewAttr):
     @property
     def coupling(self):
         '''The coupling of the trigger source.
+        Cached
+
         Raises:
             ValueError: if value is not one of the allowed strings
         '''
@@ -137,6 +141,8 @@ class MSO4TriggerBase(util.DisableNewAttr):
     @property
     def level(self):
         '''The trigger level.
+        Cached
+
         Raises:
             ValueError: if value is not a float
         '''
@@ -160,6 +166,8 @@ class MSO4TriggerBase(util.DisableNewAttr):
     @property
     def mode(self):
         '''The trigger mode (auto/normal).
+        Cached
+
         Raises:
             NotImplementedError: if trigger event is not A
             ValueError: if value is not one of the allowed strings
@@ -218,6 +226,8 @@ class MSO4EdgeTrigger(MSO4TriggerBase):
     @property
     def edge_slope(self):
         '''The edge slope (rise/fall/either).
+        Cached
+
         Raises:
             ValueError: if value is not one of the allowed strings
         '''

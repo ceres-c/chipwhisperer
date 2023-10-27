@@ -79,7 +79,7 @@ class MSO4:
             'firmware': s[3]
         }
 
-    def con(self, sn = None, ip: str = '', trig_type: MSO4Triggers = MSO4EdgeTrigger, socket: bool = True, **kwargs) -> bool:
+    def con(self, sn = None, ip: str = '', trig_type: MSO4Triggers = MSO4EdgeTrigger, socket: bool = True, display: bool = True, **kwargs) -> bool:
         '''Connect to scope and set default configuration:
             - timeout = 2000 ms
             - single sequence mode
@@ -96,6 +96,7 @@ class MSO4:
             sn (str): Ignored, but kept for compatibility with other scopes
             ip (str): IP address of scope
             socket (bool): Use socket connection instead of VISA
+            display (bool): Enable/disable waveform display on scope
             kwargs: Additional arguments to pass to pyvisa.ResourceManager.open_resource
 
         Returns:
@@ -160,7 +161,7 @@ class MSO4:
 
             # Turn off waveform display
             # Or else the scope will simply DIE after ~20 captures (:
-            self.acq.display = False
+            self.acq.display = display
 
             # TODO set acquisition mode to single/sequence
         except Exception:
@@ -214,7 +215,6 @@ class MSO4:
             raise
         time.sleep(0.05) # Wait for the scope to *actually* arm
         # Tektronix is playing games with us
-
 
     def capture(self, poll_done: bool = True):
         '''Captures trace. Scope must be armed before capturing.
@@ -305,6 +305,13 @@ class MSO4:
 
     @property
     def trigger(self) -> MSO4Triggers:
+        '''Current trigger object instance.
+
+        :Getter: Return the current trigger object instance (MSO4Triggers)
+
+        :Setter: Instantiate a new trigger object given a MSO4Triggers type.
+            Also configures the scope accordingly.
+        '''
         return self._trig
     @trigger.setter
     def trigger(self, trig_type: MSO4Triggers):
