@@ -145,20 +145,39 @@ class MSO4Acquisition(util.DisableNewAttr):
         self.sc.write(f'DISplay:WAVEform {"on" if value else "off"}')
 
     @property
-    def horiz_scale(self) -> int:
+    def horiz_scale(self) -> float:
         '''The horizontal scale of the waveform.
         Not cached
 
-        :Getter: Return the scale in s (int)
+        :Getter: Return the scale in s (float)
 
-        :Setter: Set the scale in s (int)
+        :Setter: Set the scale in s (int or float)
         '''
-        return int(self.sc.query('HORizontal:SCAle?').strip())
+        return float(self.sc.query('HORizontal:SCAle?').strip())
     @horiz_scale.setter
-    def horiz_scale(self, value: int):
-        if not isinstance(value, int):
-            raise ValueError(f'Invalid scale {value}. Must be an int.')
+    def horiz_scale(self, value: float | int):
+        if not isinstance(value, float) and not isinstance(value, int):
+            raise ValueError(f'Invalid scale {value}. Must be a float or an int.')
         self.sc.write(f'HORizontal:SCAle {value}')
+
+    @property
+    def horiz_pos(self) -> float:
+        '''The horizontal position of the waveform in percent of the screen:
+        0% is the left edge of the screen and 100% is the right edge of the screen.
+        Not cached
+
+        :Getter: Return the position in % (float)
+
+        :Setter: Set the position in % (int or float)
+        '''
+        return float(self.sc.query('HORizontal:POSition?').strip())
+    @horiz_pos.setter
+    def horiz_pos(self, value: float | int):
+        if not isinstance(value, float) and not isinstance(value, int):
+            raise ValueError(f'Invalid position {value}. Must be a float or an int.')
+        if value < 0 or value > 100:
+            raise ValueError(f'Invalid position {value}. Must be between 0 and 100.')
+        self.sc.write(f'HORizontal:POSition {value}')
 
     @property
     def horiz_record_length(self) -> int:

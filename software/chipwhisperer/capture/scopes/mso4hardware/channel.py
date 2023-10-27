@@ -56,17 +56,17 @@ class MSO4AnalogChannel(util.DisableNewAttr):
         self.sc.write(f'CH{self.channel}:SCAle {value}')
 
     @property
-    def offset(self) -> float:
-        '''The vertical offset of the waveform.
+    def position(self) -> float:
+        '''The vertical position of the waveform.
         Not cached
 
-        :Getter: Return the offset in V (float)
+        :Getter: Return the position in V (float)
 
-        :Setter: Set the offset in V (float)
+        :Setter: Set the position in V (float)
         '''
-        return float(self.sc.query(f'CH{self.channel}:OFFSet?').strip())
-    @offset.setter
-    def offset(self, value: float | int):
+        return float(self.sc.query(f'CH{self.channel}:POSition?').strip())
+    @position.setter
+    def position(self, value: float | int):
         if not isinstance(value, float) and not isinstance(value, int):
-            raise ValueError(f'Invalid offset {value}. Must be float or int')
-        self.sc.write(f'CH{self.channel}:OFFSet {value}')
+            raise ValueError(f'Invalid position {value}. Must be float or int')
+        self.sc.write(f'CH{self.channel}:POSition {value}')
