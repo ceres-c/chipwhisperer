@@ -6,6 +6,7 @@ class MSO4Acquisition(util.DisableNewAttr):
     '''Handle all the properties related to waveform acquisition.
 
     Attributes:
+        ch<n> (MSO4Vertical): The vertical channel settings for channel n.
         mode (str): The acquisition mode of the scope.
         stop_after (str): Wether the instrument continually acquires acquisitions or acquires a single sequence
         num_seq (int): In single sequence acquisition mode, specify the number of acquisitions or measurements that comprise the sequence.
@@ -38,6 +39,7 @@ class MSO4Acquisition(util.DisableNewAttr):
         self._cached_wfm_format = None
         self._cached_wfm_byte_nr = None
         self._cached_wfm_order = None
+
         self.disable_newattr()
 
     def clear_caches(self):
@@ -141,6 +143,22 @@ class MSO4Acquisition(util.DisableNewAttr):
     @display.setter
     def display(self, value: bool):
         self.sc.write(f'DISplay:WAVEform {"on" if value else "off"}')
+
+    @property
+    def horiz_scale(self) -> int:
+        '''The horizontal scale of the waveform.
+        Not cached
+
+        :Getter: Return the scale in s (int)
+
+        :Setter: Set the scale in s (int)
+        '''
+        return int(self.sc.query('HORizontal:SCAle?').strip())
+    @horiz_scale.setter
+    def horiz_scale(self, value: int):
+        if not isinstance(value, int):
+            raise ValueError(f'Invalid scale {value}. Must be an int.')
+        self.sc.write(f'HORizontal:SCAle {value}')
 
     @property
     def horiz_record_length(self) -> int:

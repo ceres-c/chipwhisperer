@@ -1,0 +1,72 @@
+import pyvisa
+
+from chipwhisperer.common.utils import util
+
+class MSO4AnalogChannel(util.DisableNewAttr):
+    '''Settings for each analog channel
+    
+    Attributes:
+        enable (bool): Enable the channel
+        scale (float): Vertical scale of the channel in V
+        offset (float): Vertical offset of the channel in V'''
+
+    def __init__(self, res: pyvisa.resources.MessageBasedResource, channel: int):
+        super().__init__()
+
+        self.sc = res
+        self.channel = channel
+
+        self.disable_newattr()
+
+    def clear_caches(self):
+        '''Clear channel caches'''
+        # No caches to clear, implemented to have a consistent interface
+        pass
+
+    @property
+    def enable(self) -> bool:
+        '''Enable the channel.
+        Not cached
+
+        :Getter: Return the enable status (bool)
+
+        :Setter: Set the enable status (bool)
+        '''
+        return bool(int(self.sc.query(f'SELect:CH{self.channel}?').strip()))
+    @enable.setter
+    def enable(self, value: bool):
+        if not isinstance(value, bool):
+            raise ValueError(f'Invalid enable {value}. Must be bool')
+        self.sc.write(f'SELect:CH{self.channel} {int(value)}')
+
+    @property
+    def scale(self) -> float:
+        '''The vertical scale of the waveform.
+        Not cached
+
+        :Getter: Return the scale in V (float)
+
+        :Setter: Set the scale in V (float)
+        '''
+        return float(self.sc.query(f'CH{self.channel}:SCAle?').strip())
+    @scale.setter
+    def scale(self, value: float | int):
+        if not isinstance(value, float) and not isinstance(value, int):
+            raise ValueError(f'Invalid scale {value}. Must be float or int')
+        self.sc.write(f'CH{self.channel}:SCAle {value}')
+
+    @property
+    def offset(self) -> float:
+        '''The vertical offset of the waveform.
+        Not cached
+
+        :Getter: Return the offset in V (float)
+
+        :Setter: Set the offset in V (float)
+        '''
+        return float(self.sc.query(f'CH{self.channel}:OFFSet?').strip())
+    @offset.setter
+    def offset(self, value: float | int):
+        if not isinstance(value, float) and not isinstance(value, int):
+            raise ValueError(f'Invalid offset {value}. Must be float or int')
+        self.sc.write(f'CH{self.channel}:OFFSet {value}')

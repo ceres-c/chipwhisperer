@@ -9,6 +9,7 @@ from pyvisa import constants
 
 from .mso4hardware.triggers import MSO4Triggers, MSO4EdgeTrigger
 from .mso4hardware.acquisition import MSO4Acquisition
+from .mso4hardware.channel import MSO4AnalogChannel
 from chipwhisperer.logging import scope_logger
 from chipwhisperer.common.utils import util
 
@@ -26,6 +27,7 @@ class MSO4:
     Attributes:
         rm: pyvisa.ResourceManager instance
         sc: pyvisa.resources.MessageBasedResource instance
+        ch_a (list):  1-based list of MSO4AnalogChannel instances
         trigger: MSO4Triggers type (not an instance)
     '''
 
@@ -41,6 +43,9 @@ class MSO4:
         self._trig: MSO4Triggers = None # type: ignore
         self.acq: MSO4Acquisition = None # type: ignore
 
+        self.ch_a: list[MSO4AnalogChannel] = []
+        self.ch_a.append(None) # Dummy channel to make indexing easier # type: ignore
+
         self.wfm_data_points: Sequence = []
 
         self.connectStatus = False
@@ -53,6 +58,8 @@ class MSO4:
         '''
         self._trig.clear_caches()
         self.acq.clear_caches()
+        for ch in self.ch_a:
+            ch.clear_caches()
         self.wfm_data_points = []
 
     def _id_scope(self) -> dict:
@@ -134,6 +141,10 @@ class MSO4:
         # Init additional scope classes
         self.trigger = trig_type
         self.acq = MSO4Acquisition(self.sc)
+        ch_a_num = int(sc_id['model'][-1]) # Hacky, I know, but even Tektronix people suggest it
+        # Source: https://forum.tek.com/viewtopic.php?f=568&t=135345
+        for ch_a in range(ch_a_num):
+            self.ch_a.append(MSO4AnalogChannel(self.sc, ch_a + 1))
 
         # Configure scope environment
         try:
@@ -303,6 +314,13 @@ class MSO4:
 
     getLastTrace = util.camel_case_deprecated(get_last_trace)
 
+    def ch_a_enable(self, value: list[bool]) -> None:
+        '''Convenience function to enable/disable analog channels.
+        Will start at channel 1 and enable/disable as many channels as
+        there are values in the list.'''
+        for i in range(0, min(len(value), self.ch_a_num)):
+            self.ch_a[i + 1].enable = value[i]
+
     @property
     def trigger(self) -> MSO4Triggers:
         '''Current trigger object instance.
@@ -329,3 +347,11 @@ class MSO4:
     @timeout.setter
     def timeout(self, value: float):
         self.sc.timeout = value
+
+    @property
+    def ch_a_num(self) -> int:
+        '''Number of analog channels on the scope.
+
+        :Getter: Return the number of analog channels (int)
+        '''
+        return len(self.ch_a) - 1

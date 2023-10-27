@@ -275,4 +275,4 @@ class MSO4WidthTrigger(MSO4TriggerBase):
 
     # TODO lowlimit, highlimit, when & polarity properties
 
-MSO4Triggers = Union[Type[MSO4EdgeTrigger], Type[MSO4WidthTrigger]]
+MSO4Triggers = Type[MSO4EdgeTrigger] | Type[MSO4WidthTrigger]
