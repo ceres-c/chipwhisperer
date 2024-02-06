@@ -1,6 +1,7 @@
 import pyvisa
 
 from chipwhisperer.common.utils import util
+from chipwhisperer.logging import scope_logger
 
 class MSO4AnalogChannel(util.DisableNewAttr):
     '''Settings for each analog channel
@@ -54,6 +55,10 @@ class MSO4AnalogChannel(util.DisableNewAttr):
         if not isinstance(value, float) and not isinstance(value, int):
             raise ValueError(f'Invalid scale {value}. Must be float or int')
         self.sc.write(f'CH{self.channel}:SCAle {value}')
+        # Check if the scale was set correctly
+        actual = self.scale
+        if actual != value:
+            scope_logger.warning('Channel %d scale was set to %f V, but is actually %f V', self.channel, value, actual)
 
     @property
     def position(self) -> float:
@@ -70,3 +75,7 @@ class MSO4AnalogChannel(util.DisableNewAttr):
         if not isinstance(value, float) and not isinstance(value, int):
             raise ValueError(f'Invalid position {value}. Must be float or int')
         self.sc.write(f'CH{self.channel}:POSition {value}')
+        # Check if the position was set correctly
+        actual = self.position
+        if actual != value:
+            scope_logger.warning('Channel %d position was set to %f V, but is actually %f V', self.channel, value, actual)

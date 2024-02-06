@@ -1,6 +1,7 @@
 import pyvisa
 
 from chipwhisperer.common.utils import util
+from chipwhisperer.logging import scope_logger
 
 class MSO4Acquisition(util.DisableNewAttr):
     '''Handle all the properties related to waveform acquisition.
@@ -159,6 +160,10 @@ class MSO4Acquisition(util.DisableNewAttr):
         if not isinstance(value, float) and not isinstance(value, int):
             raise ValueError(f'Invalid scale {value}. Must be a float or an int.')
         self.sc.write(f'HORizontal:SCAle {value}')
+        # Check if the scale was set correctly
+        actual = self.horiz_scale
+        if actual != value:
+            scope_logger.warning('Failed to set horizontal scale to %f. Got %f instead.', value, actual)
 
     @property
     def horiz_pos(self) -> float:
@@ -178,6 +183,10 @@ class MSO4Acquisition(util.DisableNewAttr):
         if value < 0 or value > 100:
             raise ValueError(f'Invalid position {value}. Must be between 0 and 100.')
         self.sc.write(f'HORizontal:POSition {value}')
+        # Check if the position was set correctly
+        actual = self.horiz_pos
+        if actual != value:
+            scope_logger.warning('Failed to set horizontal position to %f. Got %f instead.', value, actual)
 
     @property
     def horiz_record_length(self) -> int:
