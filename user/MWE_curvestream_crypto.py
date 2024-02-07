@@ -2,6 +2,9 @@ import pyvisa as visa
 import chipwhisperer as cw
 import time
 
+TIMEOUT = 20000
+TIMEOUT_SHORT = 200 # Used when running the acquisition loop and don't want to waste time on a missed trigger
+
 print("set up VISA connection")
 
 rm = visa.ResourceManager()
@@ -9,7 +12,7 @@ rm = visa.ResourceManager()
 scope_address = "TCPIP0::192.168.1.140::inst0::INSTR"
 
 scope: visa.resources.MessageBasedResource = rm.open_resource(scope_address) # type: ignore
-scope.timeout = 20000
+scope.timeout = TIMEOUT
 
 print("reset scope")
 scope.write("*RST")
@@ -35,6 +38,7 @@ scope.write("TRIGger:A:EDGE:SLOPe RISE")
 scope.write("TRIGger:A:MODe NORMAL")
 
 scope.write("ACQuire:FASTAcq:STATE ON")
+scope.write("CURVEStream?")
 
 # Configure the target
 # On the CW305, setting force=False only programs the FPGA if it is currently unprogrammed, whereas force=True programs the FPGA regardless.
@@ -47,15 +51,27 @@ target.pll.pll_outfreq_set(10E6, 1)
 
 # Acquire 1000 traces
 traces = []
+skipped = False # Used to simulate a "glitch" in the trigger signal
 # scope.write("display:waveform 1")
 # Enable curvestream mode
-scope.write("CURVEStream?") # Must be done here???
-for i in range(1000):
+scope.timeout = TIMEOUT_SHORT # Reduce timeout here in case we miss a trigger
+for i in range(100):
     print(i, end="\r", flush=True)
-    target.simpleserial_write('p', b'\x00' * 16)
-    response = target.simpleserial_read('r', target.output_len, ack=True)
-    trace = scope.read_raw()
+    if not (i == 32 and not skipped):
+        skipped = True
+        target.simpleserial_write('p', b'\x00' * 16)
+        response = target.simpleserial_read('r', target.output_len, ack=True)
+    try:
+        trace = scope.read_raw()
+    except visa.errors.VisaIOError as e:
+        if e.error_code == visa.constants.VI_ERROR_TMO:
+            print("Timeout occurred")
+            i -= 1
+            continue
+    if traces and trace == traces[-1]:
+        print("Duplicate trace detected")
     traces.append(trace)
+scope.timeout = TIMEOUT # Reset timeout
 
 print(len(traces))
 scope.write("*CLS")
