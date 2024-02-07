@@ -40,6 +40,7 @@ class MSO4Acquisition(util.DisableNewAttr):
         self._cached_wfm_format = None
         self._cached_wfm_byte_nr = None
         self._cached_wfm_order = None
+        self._cached_curvestream = None
 
         self.disable_newattr()
 
@@ -53,6 +54,7 @@ class MSO4Acquisition(util.DisableNewAttr):
         self._cached_wfm_format = None
         self._cached_wfm_byte_nr = None
         self._cached_wfm_order = None
+        self._cached_curvestream = None
 
     def configured(self) -> bool:
         '''Check if the scope have been configured for acquisition.
@@ -61,6 +63,8 @@ class MSO4Acquisition(util.DisableNewAttr):
 
         Raises: ValueError if any of the required variables are not set
         '''
+        if self.curvestream:
+            return True
         if all([self.mode, self.wfm_src, self.wfm_encoding, self.wfm_binary_format, self.wfm_byte_nr, self.wfm_byte_order]):
             return True
         raise ValueError('Variables [acq.mode, acq.src, acq.wfm_encoding, acq.wfm_binary_format, acq.wfm_byte_nr, acq.wfm_byte_order] must be set before acquisition')
@@ -359,3 +363,25 @@ class MSO4Acquisition(util.DisableNewAttr):
             return
         self._cached_wfm_order = value
         self.sc.write(f'WFMOutpre:BYT_Or {value}')
+
+    @property
+    def curvestream(self) -> bool:
+        '''Enable or disable curvestream mode.
+        Cached
+
+        :Getter: Return the curvestream state (bool)
+
+        :Setter: Set the curvestream state (bool)
+        '''
+        if self._cached_curvestream is None:
+            self._cached_curvestream = 'curvestream' in self.sc.query('*OPC?').lower()
+        return self._cached_curvestream
+    @curvestream.setter
+    def curvestream(self, value: bool):
+        if self._cached_curvestream == value:
+            return
+        self._cached_curvestream = value
+        if value:
+            self.sc.write('CURVestream?')
+        else:
+            self.sc.write('*CLS')

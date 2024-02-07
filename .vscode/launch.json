@@ -10,6 +10,13 @@
             "request": "launch",
             "program": "${workspaceFolder}/user/mso44_test.py",
             "justMyCode": true,
+        },
+        {
+            "name": "curvestream test",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/user/curvestream_test.py",
+            "justMyCode": true,
         }
     ]
 }

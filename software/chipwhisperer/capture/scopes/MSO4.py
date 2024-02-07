@@ -1,4 +1,5 @@
 import datetime
+import struct
 import time
 from typing import Sequence
 
@@ -125,6 +126,7 @@ class MSO4:
             self.sc.write_termination = '\n'
         else:
             self.sc = self.rm.open_resource(f'TCPIP::{ip}::INSTR') # type: ignore
+        self.sc.write('*CLS') # Clear event queue, standard event status register, status byte register
         self.sc.clear() # Clear buffers
 
         sc_id = self._id_scope()
@@ -186,7 +188,10 @@ class MSO4:
         '''Disconnect from scope.
         '''
         # Re enable waveform display
-        self.acq.display = True
+        self.sc.clear()
+        self.sc.write('*CLS') # Clear event queue, standard event status register, status byte register
+        if self.acq:
+            self.acq.display = True
 
         self.sc.close()
         self.rm.close()
@@ -209,8 +214,11 @@ class MSO4:
         if self.connectStatus is False:
             raise OSError('Scope is not connected. Connect it first...')
 
+        if self.acq and self.acq.curvestream:
+            return # We're already in curvestream mode
+
         try:
-            self.sc.write('ACQuire:STATE 1') # Acquire one trace
+            self.sc.write('ACQuire:STATE 100') # Acquire 100 traces # TODO is 100 a good idea?
 
             # Wait for the scope to arm
             for _ in range(10):
@@ -226,6 +234,9 @@ class MSO4:
             raise
         time.sleep(0.05) # Wait for the scope to *actually* arm
         # Tektronix is playing games with us
+
+        # Enable curvestream mode
+        self.acq.curvestream = True
 
     def capture(self, poll_done: bool = True):
         '''Captures trace. Scope must be armed before capturing.
@@ -250,57 +261,23 @@ class MSO4:
         self.acq.configured() # Check that the scope is configured
 
         timeout = False
-        starttime = datetime.datetime.now()
-        self.starttime = starttime # TODO remove
-
-        # Got these from the programmer manual § WFMOutpre:BN_Fmt
-        types = {
-            1: {'ri': 'b', 'rp': 'B'},
-            2: {'ri': 'h', 'rp': 'H'},
-            4: {'ri': 'i', 'rp': 'I', 'fp': 'f'},
-            8: {'ri': 'q', 'rp': 'Q', 'fp': 'd'},
-        }
-
-        # Wait for a trigger
-        while 'armed' in self.sc.query('TRIGger:STATE?').lower():
-            diff = datetime.datetime.now() - starttime
-            # If we've timed out, don't wait any longer for a trigger
-            if diff.total_seconds() > (self.timeout / 1000):
-                scope_logger.warning('Timeout in MSO4 capture(), no trigger seen! Trigger forced, data is invalid.')
-                timeout = True
-                self.sc.write('TRIGger FORCe')
-                break
-        self.armtime = datetime.datetime.now() # TODO remove
-
-        # Wait for the data to be available
-        while 'none' in self.sc.query('DATa:SOUrce:AVAILable?').lower():
-            diff = datetime.datetime.now() - starttime
-            if diff.total_seconds() > (self.timeout / 1000):
-                scope_logger.warning('Timeout in MSO4 capture() waiting for DATa:SOUrce:AVAILable.')
-                timeout = True
-                return timeout
-        # If there is data available...
-        self.availabletime = datetime.datetime.now() # TODO remove
 
         # Read the data
+        raw_data: Sequence = []
         try:
-            if self.acq.wfm_encoding == 'binary':
-                self.wfm_data_points = self.sc.query_binary_values(
-                    'CURVE?',
-                    datatype = types[self.acq.wfm_byte_nr][self.acq.wfm_binary_format],
-                    is_big_endian = self.acq.wfm_byte_order == 'msb',
-                    container=numpy.array
-                )
-            else:
-                raise IOError('Unknown data encoding')
-                # TODO implement ASCII encoding
-                # values = self.sc.query('CURVE?').strip()
+            raw_data = self.sc.read_raw()
         except pyvisa.errors.VisaIOError as e:
             if e.error_code == constants.StatusCode.error_timeout:
                 timeout = True
             else:
                 raise
-        self.endtime = datetime.datetime.now() # TODO remove
+
+        if not timeout:
+            if raw_data == self.wfm_data_points:
+                # We actually timed out and got the same data twice
+                timeout = True
+            else:
+                self.wfm_data_points = raw_data
 
         return timeout
 
@@ -310,7 +287,17 @@ class MSO4:
         Returns:
             A numpy array containing the scope data.
         '''
-        return self.wfm_data_points
+        # Got these from the programmer manual § WFMOutpre:BN_Fmt
+        types = {
+            1: {'ri': 'b', 'rp': 'B'},
+            2: {'ri': 'h', 'rp': 'H'},
+            4: {'ri': 'i', 'rp': 'I', 'fp': 'f'},
+            8: {'ri': 'q', 'rp': 'Q', 'fp': 'd'},
+        }
+        endianess = ">" if self.acq.wfm_byte_order == 'msb' else "<"
+        datatype = types[self.acq.wfm_byte_nr][self.acq.wfm_binary_format]
+        array_length = int(len(self.wfm_data_points) / self.acq.wfm_byte_nr)
+        return numpy.frombuffer(self.wfm_data_points, endianess + datatype, array_length, offset=0)
 
     getLastTrace = util.camel_case_deprecated(get_last_trace)
 
